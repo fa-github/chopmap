@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>chopmap - 気分転換のウォーキング・ラン周回ルート</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;800;900&family=Noto+Sans+JP:wght@500;700;900&display=swap" rel="stylesheet">
+
+  <style>
+    body { font-family: 'Plus Jakarta Sans', 'Noto Sans JP', sans-serif; }
+    
+    .user-pulse {
+      width: 14px;
+      height: 14px;
+      background: #10b981;
+      border: 2.5px solid #ffffff;
+      border-radius: 50%;
+      box-shadow: 0 0 0 5px rgba(16, 185, 129, 0.35);
+    }
+
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-800 h-screen w-screen overflow-hidden relative">
+
+  <!-- フルスクリーン地図 -->
+  <div id="map" class="absolute inset-0 z-0"></div>
+
+  <!-- 到達範囲外エラー・トースト通知 -->
+  <div id="error-toast" class="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-rose-600 text-white text-xs font-bold px-4 py-2.5 rounded-full shadow-2xl transition-all duration-300 opacity-0 pointer-events-none flex items-center gap-1.5">
+    <span>⚠️</span> <span id="error-toast-msg">設定した距離（3.0km）の到達可能エリア外です</span>
+  </div>
+
+  <!-- 地図上の注記バッジ（PC・スマホ両対応） -->
+  <div class="absolute top-4 right-4 md:top-auto md:bottom-6 md:right-20 z-10 max-w-[220px] md:max-w-none bg-white/90 backdrop-blur-md border border-slate-200 px-3 py-1.5 rounded-xl shadow-lg text-[10px] text-slate-500 font-medium leading-tight select-none">
+    🧭 <span>大まかな進行順路の目安図です（実際のナビ案内はGoogleマップが担当）</span>
+  </div>
+
+  <!-- 操作コンテナ（PC: 左上フローティング / スマホ: Googleマップ風ボトムシート） -->
+  <div id="bottom-sheet" class="absolute bottom-0 left-0 right-0 md:bottom-auto md:right-auto md:top-4 md:left-4 z-20 w-full md:w-[410px] flex flex-col transition-all duration-300 ease-out">
+    <div class="bg-white/95 backdrop-blur-md shadow-2xl rounded-t-3xl md:rounded-3xl border border-white/60 flex flex-col overflow-hidden max-h-[85vh] md:max-h-[calc(100vh-2rem)]">
+      
+      <!-- スマホ用ドラッグハンドルバー -->
+      <div id="sheet-handle" class="w-full pt-2.5 pb-1 flex justify-center cursor-pointer md:hidden bg-slate-50 border-b border-slate-100">
+        <div class="w-10 h-1 bg-slate-300 rounded-full"></div>
+      </div>
+
+      <!-- ヘッダー -->
+      <div class="px-5 py-3 flex items-center justify-between border-b border-slate-100">
+        <div class="flex items-center gap-2">
+          <div class="w-7 h-7 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-black text-xs shadow-sm shadow-emerald-500/20">
+            c
+          </div>
+          <div>
+            <h1 class="text-base font-black tracking-tight text-slate-900 leading-tight">chopmap</h1>
+            <span class="text-[9px] font-bold tracking-wider text-slate-400 block -mt-0.5 uppercase">Change of pace map</span>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <span id="route-mode-badge" class="text-[10px] font-extrabold bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full">
+            🔄 周回ループ
+          </span>
+          <!-- スマホ用開閉トグルボタン -->
+          <button id="toggle-sheet-btn" class="md:hidden text-xs bg-slate-100 px-2 py-1 rounded-lg text-slate-600 font-bold">
+            詳細 ▾
+          </button>
+        </div>
+      </div>
+
+      <!-- スクロール入力エリア（スマホでは折りたたみ可能） -->
+      <div id="sheet-content" class="p-4 md:p-5 overflow-y-auto space-y-4 max-h-[50vh] md:max-h-[60vh]">
+
+        <!-- 1. 目標距離 -->
+        <div class="bg-slate-900 text-white p-4 rounded-2xl shadow-inner relative overflow-hidden">
+          <div class="flex justify-between items-baseline mb-1">
+            <div class="flex items-center gap-1.5">
+              <span class="text-[10px] font-bold tracking-wider text-slate-400 uppercase">Distance</span>
+              <span class="text-[9px] text-emerald-400 bg-emerald-950 px-1.5 py-0.5 rounded">到達限界: 緑サークル内</span>
+            </div>
+            <span id="calc-time-display" class="text-xs font-bold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded-md">所要目安: 約38分</span>
+          </div>
+          <div class="flex items-baseline gap-1">
+            <span id="dist-display" class="text-4xl font-black tracking-tight text-white">3.0</span>
+            <span class="text-xs font-bold text-emerald-400">KM</span>
+          </div>
+          <input type="range" id="dist-slider" min="0.5" max="15.0" step="0.5" value="3.0" class="w-full mt-2 accent-emerald-400 cursor-pointer">
+        </div>
+
+        <!-- 2. 方位磁針型 方角セレクター -->
+        <div class="bg-slate-50 p-3 rounded-2xl border border-slate-200/70">
+          <label class="text-[11px] font-extrabold text-slate-500 block mb-2 text-center md:text-left">展開する方角（コンパス選択）</label>
+          <div class="flex justify-center">
+            <div class="grid grid-cols-3 gap-1.5 w-44">
+              <div></div>
+              <button type="button" dir-val="north" class="compass-btn py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-100 flex flex-col items-center justify-center shadow-sm transition">
+                <span class="text-xs">⬆️</span><span class="text-[9px]">北</span>
+              </button>
+              <div></div>
+
+              <button type="button" dir-val="west" class="compass-btn py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-100 flex flex-col items-center justify-center shadow-sm transition">
+                <span class="text-xs">⬅️</span><span class="text-[9px]">西</span>
+              </button>
+              <button type="button" dir-val="random" class="compass-btn py-1.5 rounded-xl bg-emerald-50 border-2 border-emerald-500 text-emerald-800 font-black text-xs flex flex-col items-center justify-center shadow-sm transition">
+                <span class="text-xs">🎲</span><span class="text-[9px]">おまかせ</span>
+              </button>
+              <button type="button" dir-val="east" class="compass-btn py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-100 flex flex-col items-center justify-center shadow-sm transition">
+                <span class="text-xs">➡️</span><span class="text-[9px]">東</span>
+              </button>
+
+              <div></div>
+              <button type="button" dir-val="south" class="compass-btn py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-100 flex flex-col items-center justify-center shadow-sm transition">
+                <span class="text-xs">⬇️</span><span class="text-[9px]">南</span>
+              </button>
+              <div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. 地点設定 -->
+        <div class="space-y-2 bg-slate-50 p-3.5 rounded-2xl border border-slate-200/70">
+          
+          <!-- スタート -->
+          <div class="relative">
+            <div class="flex items-center gap-1.5 mb-1">
+              <span class="w-4 h-4 rounded-full bg-emerald-600 text-white text-[9px] font-black flex items-center justify-center">S</span>
+              <label class="text-[11px] font-bold text-slate-600">スタート</label>
+            </div>
+            <div class="flex gap-1.5">
+              <input type="text" id="start-input" value="現在地" class="w-full text-xs px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white font-medium">
+              <button id="reset-start-loc-btn" title="現在地に戻す" class="px-3 bg-white border border-slate-200 hover:bg-slate-100 text-slate-600 rounded-xl text-xs transition">📍</button>
+            </div>
+            <div id="start-suggestions" class="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl z-50 hidden max-h-48 overflow-y-auto divide-y divide-slate-100"></div>
+          </div>
+
+          <!-- 経由地 -->
+          <div class="relative pt-1 border-t border-slate-200/60">
+            <div class="flex justify-between items-center mb-1">
+              <div class="flex items-center gap-1.5">
+                <span class="w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-black flex items-center justify-center">1</span>
+                <label class="text-[11px] font-bold text-slate-600">経由地（緑サークル内限定）</label>
+              </div>
+              <span class="text-[10px] text-slate-400">地図タップも可</span>
+            </div>
+            <div class="flex gap-1.5">
+              <input type="text" id="via-input" placeholder="空欄（指定なし・完全自動）" class="w-full text-xs px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white font-medium">
+              <button id="clear-via-btn" title="解除" class="px-3 bg-white border border-slate-200 hover:bg-slate-100 text-slate-400 hover:text-rose-500 rounded-xl text-xs transition">✕</button>
+            </div>
+            <div id="via-suggestions" class="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl z-50 hidden max-h-48 overflow-y-auto divide-y divide-slate-100"></div>
+
+            <!-- 経由のタイミング -->
+            <div id="via-timing-box" class="hidden mt-2 pt-2 border-t border-slate-200/60 flex items-center justify-between text-xs">
+              <span class="text-slate-600 text-[11px] font-bold">経由のタイミング:</span>
+              <div class="flex gap-1">
+                <button type="button" via-timing="early" class="via-timing-btn px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-500 text-emerald-700 font-bold text-[11px]">前半</button>
+                <button type="button" via-timing="mid" class="via-timing-btn px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-600 text-[11px]">中盤</button>
+                <button type="button" via-timing="late" class="via-timing-btn px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-600 text-[11px]">後半</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- ゴール -->
+          <div class="relative pt-1 border-t border-slate-200/60">
+            <div class="flex justify-between items-center mb-1">
+              <div class="flex items-center gap-1.5">
+                <span class="w-4 h-4 rounded-full bg-rose-500 text-white text-[9px] font-black flex items-center justify-center">G</span>
+                <label class="text-[11px] font-bold text-slate-600">ゴール</label>
+              </div>
+              <span class="text-[10px] text-slate-400">別地点への片道も可</span>
+            </div>
+            <div class="flex gap-1.5">
+              <input type="text" id="goal-input" value="現在地" class="w-full text-xs px-3 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white font-medium">
+              <button id="clear-goal-btn" title="現在地に戻す" class="px-3 bg-white border border-slate-200 hover:bg-slate-100 text-slate-500 rounded-xl text-xs transition">🔄</button>
+            </div>
+            <div id="goal-suggestions" class="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-2xl z-50 hidden max-h-48 overflow-y-auto divide-y divide-slate-100"></div>
+          </div>
+        </div>
+
+        <!-- 4. ペース調整 ＆ 目安表 -->
+        <div class="space-y-2 bg-slate-50 p-3.5 rounded-2xl border border-slate-200/70">
+          <div class="flex items-center justify-between">
+            <label class="text-[11px] font-extrabold text-slate-500">移動ペース</label>
+            <div class="flex items-center gap-1 bg-white px-2 py-0.5 rounded-lg border border-slate-200">
+              <input type="number" id="pace-input" min="1.0" max="25.0" step="0.1" value="4.8" class="w-12 text-right font-black text-emerald-600 bg-transparent text-xs outline-none">
+              <span class="text-[10px] font-bold text-slate-500">km/h</span>
+            </div>
+          </div>
+          
+          <div class="grid grid-cols-5 gap-1 text-[10px]">
+            <button type="button" class="pace-btn py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold" data-speed="4.0">散歩<br>4.0</button>
+            <button type="button" class="pace-btn py-1.5 rounded-lg bg-emerald-50 border border-emerald-500 text-emerald-700 font-extrabold" data-speed="4.8">普通<br>4.8</button>
+            <button type="button" class="pace-btn py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold" data-speed="5.8">早歩<br>5.8</button>
+            <button type="button" class="pace-btn py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold" data-speed="7.5">ジョグ<br>7.5</button>
+            <button type="button" class="pace-btn py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold" data-speed="10.0">ラン<br>10.0</button>
+          </div>
+
+          <details class="text-[11px] text-slate-500 pt-1">
+            <summary class="cursor-pointer text-emerald-600 font-bold select-none hover:underline flex items-center justify-between">
+              <span>💡 ペースの目安一覧</span>
+              <span class="text-xs">▾</span>
+            </summary>
+            <div class="mt-2 space-y-1 bg-white p-2.5 rounded-xl border border-slate-200 text-[10px] leading-relaxed">
+              <div>・<strong>散歩（街歩き）:</strong> 3.8〜4.2 km/h（女性平均ペース）</div>
+              <div>・<strong>通常歩行:</strong> 4.5〜5.0 km/h（成人標準・通勤等）</div>
+              <div>・<strong>早歩き:</strong> 5.5〜6.2 km/h（運動・エクササイズ）</div>
+              <div>・<strong>ジョギング:</strong> 7.0〜8.5 km/h（会話ができる負荷）</div>
+              <div>・<strong>ランニング:</strong> 9.5〜11.5 km/h（しっかり走る）</div>
+            </div>
+          </details>
+        </div>
+
+        <!-- 5. 高低差・属性のこだわり条件 -->
+        <div class="bg-slate-50 p-3.5 rounded-2xl border border-slate-200/70 space-y-3">
+          <div class="flex items-center justify-between">
+            <div>
+              <span class="text-xs font-bold text-slate-700 block">こだわり条件（高低差・属性）</span>
+              <span id="custom-option-summary" class="text-[10px] text-slate-400">現在：おまかせ設定</span>
+            </div>
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input type="checkbox" id="toggle-custom-options" class="sr-only peer">
+              <div class="w-9 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+            </label>
+          </div>
+
+          <div id="custom-options-panel" class="hidden space-y-3 pt-2 border-t border-slate-200/80">
+            <div>
+              <div class="flex justify-between items-center mb-1">
+                <label class="text-[11px] font-bold text-slate-600">コースの高低差</label>
+                <span id="elevation-level-text" class="text-[11px] font-black text-emerald-600">3: おまかせ / 自然</span>
+              </div>
+              <input type="range" id="elevation-slider" min="1" max="5" step="1" value="3" class="w-full accent-emerald-500 cursor-pointer">
+              <div class="flex justify-between text-[9px] text-slate-400 font-bold px-0.5">
+                <span>1:平坦重視</span>
+                <span>3:標準</span>
+                <span>5:坂道・階段</span>
+              </div>
+            </div>
+
+            <div>
+              <label class="text-[11px] font-bold text-slate-600 block mb-1">ルート属性</label>
+              <div class="grid grid-cols-2 gap-1.5 text-xs">
+                <button type="button" env-val="park" class="env-btn py-2 px-1 rounded-xl bg-emerald-50 border border-emerald-500 text-emerald-700 font-bold text-[11px]">🌳 緑道・公園優先</button>
+                <button type="button" env-val="bright" class="env-btn py-2 px-1 rounded-xl bg-white border border-slate-200 text-slate-600 text-[11px]">💡 明るい大通り優先</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- アクション固定フッター（常に指の届く位置） -->
+      <div class="p-3 md:p-4 bg-white border-t border-slate-100 space-y-1.5">
+        <div id="route-warning-banner" class="hidden text-rose-600 text-[11px] font-bold bg-rose-50 px-3 py-1.5 rounded-lg text-center border border-rose-200">
+          ⚠️ 経由地が設定距離（◯km）の到達可能エリア外です
+        </div>
+        <div class="flex gap-2">
+          <button id="generate-btn" class="flex-1 bg-slate-900 hover:bg-slate-800 active:scale-[0.98] text-white font-extrabold py-3 px-3 rounded-2xl shadow-md transition flex justify-center items-center gap-1 text-xs md:text-sm">
+            <span>🔄 別のルート</span>
+          </button>
+          <button id="open-gmaps-btn" disabled class="flex-[1.5] bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-100 disabled:text-slate-400 active:scale-[0.98] text-white font-extrabold py-3 px-3 rounded-2xl shadow-md shadow-emerald-500/20 transition flex justify-center items-center gap-1 text-xs md:text-sm">
+            <span>📍 Googleマップでナビ開始</span>
+          </button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- 現在地復帰ボタン -->
+  <button id="recenter-btn" title="現在地に戻る" class="absolute bottom-28 md:bottom-6 right-4 md:right-6 z-10 w-11 h-11 md:w-12 md:h-12 bg-white rounded-2xl shadow-xl border border-slate-200 flex items-center justify-center text-slate-700 hover:bg-slate-50 active:scale-95 transition">
+    🎯
+  </button>
+
+  <script>
+    // --- 状態管理 ---
+    let map;
+    let userLocation = null;
+
+    let startPoint = { lat: 35.6812, lng: 139.7671, name: "現在地" };
+    let viaPoint = null;
+    let goalPoint = { lat: 35.6812, lng: 139.7671, name: "現在地" };
+
+    let targetPaceSpeed = 4.8;
+    let selectedDirection = 'random';
+    let selectedViaTiming = 'early';
+    let generatedWaypoints = [];
+
+    // こだわり条件
+    let useCustomOptions = false;
+    let elevationLevel = 3;
+    let selectedEnv = 'park';
+
+    // 地図レイヤー
+    let userLocMarker = null;
+    let customMarkers = [];
+    let arrowMarkers = [];
+    let routeLine = null;
+    let reachabilityCircle = null; // 到達可能エリアの緑サークル
+
+    // --- 初期化 ---
+    window.addEventListener('DOMContentLoaded', () => {
+      initMap();
+      setupUIEvents();
+      setupBottomSheet();
+      
+      setupAddressAutocomplete('start-input', 'start-suggestions', (lat, lng, name) => {
+        startPoint = { lat, lng, name };
+        updateReachabilityCircle();
+        generateRoute();
+      });
+
+      setupAddressAutocomplete('via-input', 'via-suggestions', (lat, lng, name) => {
+        const distKm = getDistanceKm(startPoint.lat, startPoint.lng, lat, lng);
+        const maxRadius = parseFloat(document.getElementById('dist-slider').value) / 2;
+        if (distKm > maxRadius) {
+          showToast(`経由地が到達可能エリア（片道${maxRadius.toFixed(1)}km）を超えています`);
+          return;
+        }
+        setViaPoint(lat, lng, name);
+      });
+
+      setupAddressAutocomplete('goal-input', 'goal-suggestions', (lat, lng, name) => {
+        goalPoint = { lat, lng, name };
+        updateModeBadge();
+        generateRoute();
+      });
+
+      initGPS();
+    });
+
+    function initMap() {
+      map = L.map('map', { zoomControl: false }).setView([startPoint.lat, startPoint.lng], 15);
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        maxZoom: 19
+      }).addTo(map);
+
+      // 地図タップ時の処理（到達サークル内のみピン設定を許可）
+      map.on('click', (e) => {
+        const targetDist = parseFloat(document.getElementById('dist-slider').value);
+        const maxRadius = targetDist / 2;
+        const clickedDist = getDistanceKm(startPoint.lat, startPoint.lng, e.latlng.lat, e.latlng.lng);
+
+        if (clickedDist > maxRadius) {
+          showToast(`緑のサークル内（到達可能エリア: 片道${maxRadius.toFixed(1)}km）を指定してください`);
+          return;
+        }
+        setViaPoint(e.latlng.lat, e.latlng.lng, "地図指定ピン");
+      });
+    }
+
+    function initGPS() {
+      if (!navigator.geolocation) return;
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          userLocation = [pos.coords.latitude, pos.coords.longitude];
+          updateUserPulse(userLocation);
+          startPoint = { lat: userLocation[0], lng: userLocation[1], name: "現在地" };
+          goalPoint = { lat: userLocation[0], lng: userLocation[1], name: "現在地" };
+          document.getElementById('start-input').value = "現在地";
+          document.getElementById('goal-input').value = "現在地";
+          map.setView(userLocation, 15);
+          updateModeBadge();
+          updateReachabilityCircle();
+          generateRoute();
+        },
+        () => {
+          updateReachabilityCircle();
+          generateRoute();
+        },
+        { enableHighAccuracy: true }
+      );
+    }
+
+    function updateUserPulse(loc) {
+      if (!userLocMarker) {
+        userLocMarker = L.marker(loc, {
+          icon: L.divIcon({ className: 'user-pulse', iconSize: [14, 14], iconAnchor: [7, 7] }),
+          zIndexOffset: 1000
+        }).addTo(map);
+      } else {
+        userLocMarker.setLatLng(loc);
+      }
+    }
+
+    // 到達可能エリア（緑の半透明サークル）の描画
+    function updateReachabilityCircle() {
+      if (reachabilityCircle) map.removeLayer(reachabilityCircle);
+      if (!startPoint) return;
+
+      const targetDistKm = parseFloat(document.getElementById('dist-slider').value);
+      // 周回で物理的に到達できる最大直線半径は 総距離 / 2
+      const maxRadiusMeters = (targetDistKm / 2) * 1000;
+
+      reachabilityCircle = L.circle([startPoint.lat, startPoint.lng], {
+        radius: maxRadiusMeters,
+        color: '#10b981',
+        weight: 1.5,
+        dashArray: '5, 5',
+        fillColor: '#10b981',
+        fillOpacity: 0.08,
+        interactive: false
+      }).addTo(map);
+    }
+
+    function setViaPoint(lat, lng, name) {
+      viaPoint = { lat, lng, name, isUserDefined: true };
+      document.getElementById('via-input').value = name;
+      document.getElementById('via-timing-box').classList.remove('hidden');
+      generateRoute();
+    }
+
+    function updateModeBadge() {
+      const isLoop = isSameLocation(startPoint, goalPoint);
+      const badge = document.getElementById('route-mode-badge');
+      if (isLoop) {
+        badge.innerText = "🔄 周回ループ";
+        badge.className = "text-[10px] font-extrabold bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full";
+      } else {
+        badge.innerText = "🏁 片道目的地";
+        badge.className = "text-[10px] font-extrabold bg-blue-100 text-blue-800 px-2.5 py-1 rounded-full";
+      }
+    }
+
+    function isSameLocation(p1, p2) {
+      if (!p1 || !p2) return false;
+      return Math.abs(p1.lat - p2.lat) < 0.0001 && Math.abs(p1.lng - p2.lng) < 0.0001;
+    }
+
+    // Googleマップ風ボトムシートの開閉ロジック
+    function setupBottomSheet() {
+      const handle = document.getElementById('sheet-handle');
+      const toggleBtn = document.getElementById('toggle-sheet-btn');
+      const content = document.getElementById('sheet-content');
+
+      let isOpen = false;
+
+      // スマホでは初期状態でコンテンツを折りたたんでおく（マップを広く見せる）
+      if (window.innerWidth < 768) {
+        content.classList.add('hidden');
+        toggleBtn.innerText = "詳細 ▴";
+      }
+
+      const toggle = () => {
+        isOpen = !isOpen;
+        if (isOpen) {
+          content.classList.remove('hidden');
+          toggleBtn.innerText = "閉じる ▾";
+        } else {
+          content.classList.add('hidden');
+          toggleBtn.innerText = "詳細 ▴";
+        }
+      };
+
+      handle.addEventListener('click', toggle);
+      toggleBtn.addEventListener('click', toggle);
+    }
+
+    // トースト通知
+    function showToast(msg) {
+      const toast = document.getElementById('error-toast');
+      document.getElementById('error-toast-msg').innerText = msg;
+      toast.classList.remove('opacity-0', 'pointer-events-none');
+      setTimeout(() => {
+        toast.classList.add('opacity-0', 'pointer-events-none');
+      }, 3500);
+    }
+
+    // --- UIイベント設定 ---
+    function setupUIEvents() {
+      const distSlider = document.getElementById('dist-slider');
+      distSlider.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        document.getElementById('dist-display').innerText = val.toFixed(1);
+        updateCalcTime();
+        updateReachabilityCircle();
+        generateRoute();
+      });
+
+      const paceInput = document.getElementById('pace-input');
+      paceInput.addEventListener('change', (e) => {
+        let val = parseFloat(e.target.value);
+        if (isNaN(val) || val < 1.0) val = 4.0;
+        if (val > 25.0) val = 25.0;
+        targetPaceSpeed = val;
+        paceInput.value = val.toFixed(1);
+        updateCalcTime();
+        generateRoute();
+      });
+
+      document.querySelectorAll('.pace-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.pace-btn').forEach(b => {
+            b.className = "pace-btn py-1.5 rounded-lg bg-white border border-slate-200 text-slate-600 font-bold";
+          });
+          btn.className = "pace-btn py-1.5 rounded-lg bg-emerald-50 border border-emerald-500 text-emerald-700 font-extrabold";
+          targetPaceSpeed = parseFloat(btn.getAttribute('data-speed'));
+          paceInput.value = targetPaceSpeed.toFixed(1);
+          updateCalcTime();
+          generateRoute();
+        });
+      });
+
+      document.querySelectorAll('.compass-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.compass-btn').forEach(b => {
+            b.className = "compass-btn py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 font-bold text-xs hover:bg-slate-100 flex flex-col items-center justify-center shadow-sm transition";
+          });
+          btn.className = "compass-btn py-1.5 rounded-xl bg-emerald-50 border-2 border-emerald-500 text-emerald-800 font-black text-xs flex flex-col items-center justify-center shadow-sm transition";
+          selectedDirection = btn.getAttribute('dir-val');
+          generateRoute();
+        });
+      });
+
+      // こだわり条件トグル
+      const customToggle = document.getElementById('toggle-custom-options');
+      const customPanel = document.getElementById('custom-options-panel');
+      const customSummary = document.getElementById('custom-option-summary');
+
+      customToggle.addEventListener('change', (e) => {
+        useCustomOptions = e.target.checked;
+        if (useCustomOptions) {
+          customPanel.classList.remove('hidden');
+          customSummary.innerText = "カスタム設定を適用中";
+          customSummary.className = "text-[10px] text-emerald-600 font-bold";
+        } else {
+          customPanel.classList.add('hidden');
+          customSummary.innerText = "現在：おまかせ設定";
+          customSummary.className = "text-[10px] text-slate-400";
+        }
+        generateRoute();
+      });
+
+      const elevSlider = document.getElementById('elevation-slider');
+      const elevText = document.getElementById('elevation-level-text');
+      const elevLabels = {
+        1: "1: できるだけ平坦",
+        2: "2: ゆるやか",
+        3: "3: おまかせ / 自然",
+        4: "4: 適度なアップダウン",
+        5: "5: 坂道・階段トレーニング"
+      };
+      elevSlider.addEventListener('input', (e) => {
+        elevationLevel = parseInt(e.target.value, 10);
+        elevText.innerText = elevLabels[elevationLevel];
+        generateRoute();
+      });
+
+      document.querySelectorAll('.env-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.env-btn').forEach(b => {
+            b.className = "env-btn py-2 px-1 rounded-xl bg-white border border-slate-200 text-slate-600 text-[11px]";
+          });
+          btn.className = "env-btn py-2 px-1 rounded-xl bg-emerald-50 border border-emerald-500 text-emerald-700 font-bold text-[11px]";
+          selectedEnv = btn.getAttribute('env-val');
+          generateRoute();
+        });
+      });
+
+      document.getElementById('clear-via-btn').addEventListener('click', () => {
+        viaPoint = null;
+        document.getElementById('via-input').value = '';
+        document.getElementById('via-timing-box').classList.add('hidden');
+        generateRoute();
+      });
+
+      document.getElementById('clear-goal-btn').addEventListener('click', () => {
+        goalPoint = { ...startPoint };
+        document.getElementById('goal-input').value = startPoint.name;
+        updateModeBadge();
+        generateRoute();
+      });
+
+      document.querySelectorAll('.via-timing-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.via-timing-btn').forEach(b => {
+            b.className = "via-timing-btn px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-600 text-[11px]";
+          });
+          btn.className = "via-timing-btn px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-500 text-emerald-700 font-bold text-[11px]";
+          selectedViaTiming = btn.getAttribute('via-timing');
+          generateRoute();
+        });
+      });
+
+      document.getElementById('reset-start-loc-btn').addEventListener('click', () => {
+        if (userLocation) {
+          startPoint = { lat: userLocation[0], lng: userLocation[1], name: "現在地" };
+          document.getElementById('start-input').value = "現在地";
+          map.setView(userLocation, 15);
+          updateModeBadge();
+          updateReachabilityCircle();
+          generateRoute();
+        } else {
+          initGPS();
+        }
+      });
+
+      document.getElementById('recenter-btn').addEventListener('click', () => {
+        if (userLocation) map.setView(userLocation, 16);
+      });
+
+      document.getElementById('generate-btn').addEventListener('click', generateRoute);
+      document.getElementById('open-gmaps-btn').addEventListener('click', openInGoogleMaps);
+    }
+
+    function updateCalcTime() {
+      const dist = parseFloat(document.getElementById('dist-slider').value);
+      const mins = Math.round((dist / targetPaceSpeed) * 60);
+      document.getElementById('calc-time-display').innerText = `所要目安: 約${mins}分`;
+    }
+
+    // --- ルート生成アルゴリズム ---
+    async function generateRoute() {
+      if (!startPoint) return;
+      const targetDistKm = parseFloat(document.getElementById('dist-slider').value);
+      const warningBanner = document.getElementById('route-warning-banner');
+      const openBtn = document.getElementById('open-gmaps-btn');
+
+      // 到達距離バリデーション
+      if (viaPoint) {
+        const viaDist = getDistanceKm(startPoint.lat, startPoint.lng, viaPoint.lat, viaPoint.lng);
+        const maxRadius = targetDistKm / 2;
+        if (viaDist > maxRadius) {
+          warningBanner.innerText = `⚠️ 経由地が到達可能エリア（${maxRadius.toFixed(1)}km以内）を超えています`;
+          warningBanner.classList.remove('hidden');
+          openBtn.disabled = true;
+          return;
+        }
+      }
+      warningBanner.classList.add('hidden');
+
+      let centerAngle;
+      if (selectedDirection === 'north') centerAngle = 0;
+      else if (selectedDirection === 'east') centerAngle = Math.PI / 2;
+      else if (selectedDirection === 'south') centerAngle = Math.PI;
+      else if (selectedDirection === 'west') centerAngle = (3 * Math.PI) / 2;
+      else centerAngle = Math.random() * 2 * Math.PI;
+
+      const jitter = (selectedDirection === 'random') ? 0 : (Math.random() - 0.5) * 0.5;
+      const activeAngle = centerAngle + jitter;
+
+      let waypoints = [];
+      const isLoop = isSameLocation(startPoint, goalPoint);
+
+      if (isLoop) {
+        if (viaPoint) {
+          const viaDist = getDistanceKm(startPoint.lat, startPoint.lng, viaPoint.lat, viaPoint.lng);
+          const surplusKm = Math.max(0.2, targetDistKm - (viaDist * 2));
+          const detourRadius = (surplusKm / 2) / 1.1;
+
+          let autoP = computeCoord(startPoint.lat, startPoint.lng, detourRadius, activeAngle);
+          autoP = await processCandidatePoint(autoP.lat, autoP.lng);
+          autoP.isUserDefined = false;
+
+          if (selectedViaTiming === 'early') {
+            waypoints = [viaPoint, autoP];
+          } else if (selectedViaTiming === 'late') {
+            waypoints = [autoP, viaPoint];
+          } else {
+            const halfRadius = detourRadius * 0.7;
+            let mid1 = computeCoord(startPoint.lat, startPoint.lng, halfRadius, activeAngle - 0.6);
+            let mid2 = computeCoord(startPoint.lat, startPoint.lng, halfRadius, activeAngle + 0.6);
+            mid1 = await processCandidatePoint(mid1.lat, mid1.lng);
+            mid2 = await processCandidatePoint(mid2.lat, mid2.lng);
+            mid1.isUserDefined = false;
+            mid2.isUserDefined = false;
+            waypoints = [mid1, viaPoint, mid2];
+          }
+        } else {
+          const radiusKm = targetDistKm / 2.8;
+          const halfSpread = 0.75;
+
+          let p1 = computeCoord(startPoint.lat, startPoint.lng, radiusKm, activeAngle - halfSpread);
+          let p2 = computeCoord(startPoint.lat, startPoint.lng, radiusKm, activeAngle + halfSpread);
+
+          p1 = await processCandidatePoint(p1.lat, p1.lng);
+          p2 = await processCandidatePoint(p2.lat, p2.lng);
+          p1.isUserDefined = false;
+          p2.isUserDefined = false;
+
+          waypoints = [p1, p2];
+        }
+      } else {
+        const straight = getDistanceKm(startPoint.lat, startPoint.lng, goalPoint.lat, goalPoint.lng);
+        const surplus = Math.max(0, targetDistKm - straight);
+
+        if (viaPoint) {
+          const detourRadius = (surplus / 2);
+          let autoP = computeCoord(startPoint.lat, startPoint.lng, detourRadius, activeAngle);
+          autoP = await processCandidatePoint(autoP.lat, autoP.lng);
+          autoP.isUserDefined = false;
+
+          if (selectedViaTiming === 'early') {
+            waypoints = surplus > 0.4 ? [viaPoint, autoP] : [viaPoint];
+          } else if (selectedViaTiming === 'late') {
+            waypoints = surplus > 0.4 ? [autoP, viaPoint] : [viaPoint];
+          } else {
+            waypoints = [viaPoint];
+          }
+        } else if (surplus > 0.4) {
+          const midLat = (startPoint.lat + goalPoint.lat) / 2;
+          const midLng = (startPoint.lng + goalPoint.lng) / 2;
+          let autoP = computeCoord(midLat, midLng, surplus / 2, activeAngle);
+          autoP = await processCandidatePoint(autoP.lat, autoP.lng);
+          autoP.isUserDefined = false;
+          waypoints = [autoP];
+        }
+      }
+
+      generatedWaypoints = waypoints;
+      renderRoutePreview(waypoints);
+      openBtn.disabled = false;
+    }
+
+    function computeCoord(lat, lng, distKm, angleRad) {
+      const dLat = (distKm / 111) * Math.cos(angleRad);
+      const dLng = (distKm / (111 * Math.cos(lat * Math.PI / 180))) * Math.sin(angleRad);
+      return { lat: lat + dLat, lng: lng + dLng };
+    }
+
+    function getDistanceKm(lat1, lon1, lat2, lon2) {
+      const R = 6371;
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    async function processCandidatePoint(lat, lng) {
+      let result = { lat, lng };
+      if (!useCustomOptions) return result;
+
+      if (selectedEnv === 'park') {
+        try {
+          const query = `[out:json][timeout:3];(node["leisure"="park"](around:350,${lat},${lng});way["leisure"="park"](around:350,${lat},${lng}););out center 1;`;
+          const res = await fetch(`https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`);
+          const data = await res.json();
+          if (data.elements && data.elements.length > 0) {
+            const el = data.elements[0];
+            result.lat = el.center ? el.center.lat : el.lat;
+            result.lng = el.center ? el.center.lon : el.lon;
+          }
+        } catch (e) {}
+      }
+
+      if (elevationLevel !== 3) {
+        try {
+          const getElev = async (la, ln) => {
+            const r = await fetch(`https://cyberjapandata2.gsi.go.jp/general/dem/scripts/getelevation.php?lon=${ln}&lat=${la}&outtype=JSON`);
+            const d = await r.json();
+            return d.elevation;
+          };
+          const startElev = await getElev(startPoint.lat, startPoint.lng);
+          const candElev = await getElev(result.lat, result.lng);
+
+          if (startElev !== '----' && candElev !== '----') {
+            const diff = candElev - startElev;
+            if (elevationLevel <= 2 && Math.abs(diff) > (elevationLevel === 1 ? 6 : 12)) {
+              result.lat = (startPoint.lat + result.lat) / 2;
+              result.lng = (startPoint.lng + result.lng) / 2;
+            }
+          }
+        } catch (e) {}
+      }
+
+      return result;
+    }
+
+    function renderRoutePreview(waypoints) {
+      if (routeLine) map.removeLayer(routeLine);
+      customMarkers.forEach(m => map.removeLayer(m));
+      arrowMarkers.forEach(a => map.removeLayer(a));
+      customMarkers = [];
+      arrowMarkers = [];
+
+      const end = goalPoint ? [goalPoint.lat, goalPoint.lng] : [startPoint.lat, startPoint.lng];
+      const pts = [[startPoint.lat, startPoint.lng], ...waypoints.map(w => [w.lat, w.lng]), end];
+
+      routeLine = L.polyline(pts, {
+        color: '#059669',
+        weight: 5,
+        opacity: 0.9,
+        lineCap: 'round',
+        lineJoin: 'round'
+      }).addTo(map);
+
+      for (let i = 0; i < pts.length - 1; i++) {
+        const from = pts[i];
+        const to = pts[i + 1];
+        
+        const midLat = (from[0] + to[0]) / 2;
+        const midLng = (from[1] + to[1]) / 2;
+
+        const dLon = (to[1] - from[1]) * Math.PI / 180;
+        const y = Math.sin(dLon) * Math.cos(to[0] * Math.PI / 180);
+        const x = Math.cos(from[0] * Math.PI / 180) * Math.sin(to[0] * Math.PI / 180) -
+                  Math.sin(from[0] * Math.PI / 180) * Math.cos(to[0] * Math.PI / 180) * Math.cos(dLon);
+        const bearing = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+
+        const arrowIcon = L.divIcon({
+          html: `<div style="transform: rotate(${bearing}deg); width: 18px; height: 18px; display: flex; align-items: center; justify-content: center;">
+                   <svg width="14" height="14" viewBox="0 0 24 24" fill="#047857" stroke="#ffffff" stroke-width="2">
+                     <polygon points="12 2 22 21 12 17 2 21 12 2"/>
+                   </svg>
+                 </div>`,
+          iconSize: [18, 18],
+          iconAnchor: [9, 9]
+        });
+
+        const arrowMarker = L.marker([midLat, midLng], { icon: arrowIcon, interactive: false }).addTo(map);
+        arrowMarkers.push(arrowMarker);
+      }
+
+      const isLoop = isSameLocation(startPoint, goalPoint);
+
+      if (isLoop) {
+        customMarkers.push(createTwinBadgeMarker([startPoint.lat, startPoint.lng], 'S/G', 'スタート ＆ ゴール（周回）'));
+      } else {
+        customMarkers.push(createBadgeMarker([startPoint.lat, startPoint.lng], 'S', '#10b981', '#ffffff', 'スタート'));
+        customMarkers.push(createBadgeMarker([goalPoint.lat, goalPoint.lng], 'G', '#f43f5e', '#ffffff', 'ゴール'));
+      }
+
+      waypoints.forEach((wp, idx) => {
+        if (wp.isUserDefined) {
+          customMarkers.push(createBadgeMarker([wp.lat, wp.lng], `${idx + 1}`, '#f59e0b', '#ffffff', 'ユーザー指定 経由地'));
+        } else {
+          customMarkers.push(createSystemPointMarker([wp.lat, wp.lng], '周回経由ポイント（自動）'));
+        }
+      });
+
+      // 周回エリアも含めて収まるようにズーム調整
+      if (reachabilityCircle) {
+        map.fitBounds(reachabilityCircle.getBounds(), { padding: [40, 40] });
+      } else {
+        map.fitBounds(routeLine.getBounds(), { padding: [50, 50] });
+      }
+    }
+
+    function createTwinBadgeMarker(latlng, label, tooltipText) {
+      const html = `
+        <div style="
+          width: 32px; height: 32px;
+          background: linear-gradient(135deg, #10b981 50%, #f43f5e 50%);
+          color: white;
+          font-weight: 900;
+          font-size: 11px;
+          border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          border: 3px solid white;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+          cursor: pointer;
+        ">${label}</div>
+      `;
+      const icon = L.divIcon({ html, className: '', iconSize: [32, 32], iconAnchor: [16, 16] });
+      return L.marker(latlng, { icon }).addTo(map).bindPopup(`<b>${tooltipText}</b>`);
+    }
+
+    function createBadgeMarker(latlng, label, bgColor, textColor, tooltipText) {
+      const html = `
+        <div style="
+          width: 26px; height: 26px;
+          background: ${bgColor};
+          color: ${textColor};
+          font-weight: 900;
+          font-size: 11px;
+          border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          border: 2.5px solid white;
+          box-shadow: 0 3px 8px rgba(0,0,0,0.25);
+          cursor: pointer;
+        ">${label}</div>
+      `;
+      const icon = L.divIcon({ html, className: '', iconSize: [26, 26], iconAnchor: [13, 13] });
+      return L.marker(latlng, { icon }).addTo(map).bindPopup(`<b>${tooltipText}</b>`);
+    }
+
+    function createSystemPointMarker(latlng, tooltipText) {
+      const html = `
+        <div style="
+          width: 16px; height: 16px;
+          background: #ffffff;
+          border-radius: 50%;
+          border: 3px solid #1e293b;
+          box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+          cursor: pointer;
+        "></div>
+      `;
+      const icon = L.divIcon({ html, className: '', iconSize: [16, 16], iconAnchor: [8, 8] });
+      return L.marker(latlng, { icon }).addTo(map).bindPopup(`<b>${tooltipText}</b>`);
+    }
+
+    // --- Googleマップ連携 ---
+    function openInGoogleMaps() {
+      if (!startPoint) return;
+      const origin = (startPoint.name === "現在地") ? "現在地" : `${startPoint.lat.toFixed(6)},${startPoint.lng.toFixed(6)}`;
+      const destination = (goalPoint.name === "現在地") ? "現在地" : `${goalPoint.lat.toFixed(6)},${goalPoint.lng.toFixed(6)}`;
+      const waypoints = generatedWaypoints.map(p => `${p.lat.toFixed(6)},${p.lng.toFixed(6)}`).join('|');
+
+      let url = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&travelmode=walking`;
+      if (waypoints) url += `&waypoints=${encodeURIComponent(waypoints)}`;
+
+      window.open(url, '_blank');
+    }
+
+    // --- 住所・施設サジェスト ---
+    function setupAddressAutocomplete(inputId, dropdownId, onSelect) {
+      const input = document.getElementById(inputId);
+      const dropdown = document.getElementById(dropdownId);
+      let debounceTimer;
+
+      input.addEventListener('input', (e) => {
+        clearTimeout(debounceTimer);
+        const query = e.target.value.trim();
+        if (query.length < 2) {
+          dropdown.classList.add('hidden');
+          return;
+        }
+
+        debounceTimer = setTimeout(async () => {
+          try {
+            const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&addressdetails=1&q=${encodeURIComponent(query)}&countrycodes=jp&limit=5`);
+            const results = await res.json();
+            
+            dropdown.innerHTML = '';
+            if (!results || results.length === 0) {
+              dropdown.classList.add('hidden');
+              return;
+            }
+
+            results.forEach(item => {
+              const addr = item.address || {};
+              const title = item.name || item.display_name.split(',')[0];
+              const pref = addr.province || addr.state || '';
+              const city = addr.city || addr.ward || addr.town || addr.village || addr.county || '';
+              const sub = addr.suburb || addr.quarter || addr.neighbourhood || '';
+              const subtitle = [pref, city, sub].filter(Boolean).join(' ') || item.display_name;
+
+              const row = document.createElement('div');
+              row.className = "px-3.5 py-2.5 hover:bg-emerald-50 cursor-pointer text-left transition";
+              row.innerHTML = `
+                <div class="font-bold text-slate-800 text-xs">${title}</div>
+                <div class="text-[10px] text-slate-400 truncate mt-0.5">${subtitle}</div>
+              `;
+
+              row.addEventListener('click', () => {
+                dropdown.classList.add('hidden');
+                input.value = title;
+                onSelect(parseFloat(item.lat), parseFloat(item.lon), title);
+              });
+              dropdown.appendChild(row);
+            });
+            dropdown.classList.remove('hidden');
+          } catch (err) {}
+        }, 350);
+      });
+
+      document.addEventListener('click', (e) => {
+        if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+          dropdown.classList.add('hidden');
+        }
+      });
+    }
+  </script>
+</body>
+</html>
